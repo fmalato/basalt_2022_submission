@@ -1,4 +1,4 @@
-name: minerl
+name: basalt_submission
 channels:
   - conda-forge
   - defaults

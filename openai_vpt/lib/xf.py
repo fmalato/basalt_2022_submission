@@ -9,7 +9,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from openai_vpt.lib import misc, mlp
-from openai_vpt.lib import torch_util as tu
+import openai_vpt.lib.torch_util as tu
 from openai_vpt.lib import util
 
 SENTINEL = 0.1337

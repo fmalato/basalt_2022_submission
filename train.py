@@ -1,5 +1,6 @@
 import logging
 import os
+import argparse
 
 import openai_vpt.train
 
@@ -10,14 +11,20 @@ coloredlogs.install(logging.DEBUG)
 MINERL_DATA_ROOT = os.getenv('MINERL_DATA_ROOT', 'data/')
 
 
-def main():
+def main(args):
     """
     This function will be called for training phase.
     This should produce and save same files you upload during your submission.
     All trained models should be placed under "train" directory!
     """
-    openai_vpt.train.main()
+    openai_vpt.train.main(args)
 
 
 if __name__ == "__main__":
-    main()
+    pars = argparse.ArgumentParser()
+    pars.add_argument('-n', '--num_traj', required=True, default=100, type=int)
+    pars.add_argument('-m', '--model', required=True)
+    pars.add_argument('-w', '--weights', required=True)
+    args = pars.parse_args()
+
+    main(args)

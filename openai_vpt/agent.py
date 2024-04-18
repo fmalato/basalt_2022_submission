@@ -104,7 +104,8 @@ def resize_image(img, target_resolution, interpolation=cv2.INTER_LINEAR):
 
 
 class MineRLAgent:
-    def __init__(self, device=None, policy_kwargs=None, pi_head_kwargs=None, do_custom=False, set_location="./train/states2actions.npz", counter_max=20, offset=0):
+    def __init__(self, device=None, policy_kwargs=None, pi_head_kwargs=None, do_custom=False, set_location="./train/states2actions.npz",
+                 counter_max=20, offset=0, divergence_scaling_factor=2):
         if device is None:
             device = default_device_type()
         self.device = th.device(device)
@@ -128,6 +129,7 @@ class MineRLAgent:
         self._dummy_first = th.from_numpy(np.array((False,))).to(device)
 
         self.offset = offset
+        self.divergence_scaling_factor = divergence_scaling_factor
         if do_custom:
             try:
                 self.latents = th.Tensor(np.concatenate(np.load(set_location, allow_pickle=True)["pi"])).half().to(device)
@@ -284,7 +286,7 @@ class MineRLAgent:
                 curr_diff = th.mean(th.abs((self.latents[self.closest_idx + self.action_counter] - pi[0, 0].half())))
             else:
                 curr_diff = 0.4
-            if curr_diff >= 2 * self.diff and curr_diff >= 0.2:
+            if curr_diff >= self.divergence_scaling_factor * self.diff and curr_diff >= 0.2:
                 self.switch_counter = min(8, self.switch_counter + 1)
             else:
                 self.switch_counter = max(0, self.switch_counter - 1)
@@ -353,10 +355,13 @@ class MineRLAgent:
 
             del ret_val['camera_total']
             del ret_val['in_inventory']
-            return ret_val, was_in_inv
+            return ret_val, was_in_inv, curr_diff
 
     def find_nearest_latent(self, diff_arr):
         self.closest_idx = th.argmin(diff_arr).cpu().item()
+        with open("used_latents_25.csv", 'a+') as f:
+            f.write(str(self.closest_idx) + "\n")
+        f.close()
 
     def get_inventory_diffs(self, img):
         # Trick for now. Usually train simple model for that, which also recognizes more.

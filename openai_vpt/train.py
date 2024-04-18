@@ -6,7 +6,7 @@
 # NOTE: This is _not_ the original code used for VPT!
 #       This is merely to illustrate how to fine-tune the models and includes
 #       the processing steps used.
-
+import argparse
 # This will likely be much worse than what original VPT did:
 # we are not training on full sequences, but only one step at a time to save VRAM.
 
@@ -20,6 +20,8 @@ import os
 from openai_vpt.agent import PI_HEAD_KWARGS, MineRLAgent
 from openai_vpt.data_loader import DataLoader
 from openai_vpt.lib.tree_util import tree_map
+
+from tqdm import tqdm
 
 EPOCHS = 1  # Keep at 1 for encoding
 # Needs to be <= number of videos
@@ -48,7 +50,7 @@ def load_model_parameters(path_to_model_file):
     return policy_kwargs, pi_head_kwargs
 
 
-def encode(data_dir, in_model, in_weights):
+def encode(data_dir, in_model, in_weights, num_traj, res_dir):
     agent_policy_kwargs, agent_pi_head_kwargs = load_model_parameters(in_model)
 
     # To create model with the right environment.
@@ -62,7 +64,8 @@ def encode(data_dir, in_model, in_weights):
         dataset_dir=data_dir,
         n_workers=N_WORKERS,
         batch_size=BATCH_SIZE,
-        n_epochs=EPOCHS
+        n_epochs=EPOCHS,
+        num_traj=num_traj
     )
 
     # Keep track of the hidden state per episode/trajectory.
@@ -75,11 +78,12 @@ def encode(data_dir, in_model, in_weights):
     pi = {}
     img = {}
     actions = {}
+    names = {}
     with torch.no_grad():
-        for batch_i, (batch_images, batch_actions, batch_episode_id) in enumerate(data_loader):
+        for batch_i, (batch_images, batch_actions, batch_episode_id, name) in tqdm(enumerate(data_loader)):
             if batch_i > 300000:
                 break
-            for image, action, episode_id in zip(batch_images, batch_actions, batch_episode_id):
+            for i, (image, action, episode_id) in enumerate(zip(batch_images, batch_actions, batch_episode_id)):
                 agent_action = agent._env_action_to_agent(action, to_torch=True, check_if_null=True)
                 if agent_action is None:
                     # Action was null
@@ -93,6 +97,7 @@ def encode(data_dir, in_model, in_weights):
                     pi[episode_id] = []
                     img[episode_id] = []
                     actions[episode_id] = []
+                    names[episode_id] = []
                 agent_state = episode_hidden_states[episode_id]
 
                 pi_distribution, v_prediction, new_agent_state, pi_h = policy.get_output_for_observation(
@@ -103,14 +108,17 @@ def encode(data_dir, in_model, in_weights):
                 )
                 new_agent_state = tree_map(lambda x: x.detach(), new_agent_state)
                 episode_hidden_states[episode_id] = new_agent_state
-                #if batch_i % 100 == 0:
-                #    print(batch_i)
-                # batch_size is 1
+                """if batch_i % 1000 == 0:
+                    print(batch_i)"""
+                    # batch_size is 1
                 pi[episode_id].append(pi_h.detach().cpu()[0, 0].numpy())
                 actions[episode_id].append(action)
+                names[episode_id].append(name)
     pi = [np.array(v).astype('float16') for v in list(pi.values())]
     actions = [np.array(v) for v in list(actions.values())]
-    np.savez_compressed("train/states2actions_"+data_dir.split("/")[-1], pi=np.array(pi), actions=np.array(actions))
+    names = [np.array(v) for v in list(names.values())]
+    np.savez_compressed(f"{res_dir}/{data_dir.split('/')[-1]}", pi=np.array(pi), actions=np.array(actions),
+                        traj_names=np.array(names))
 
 
 def do_clustering(pi, n_clusters):
@@ -131,20 +139,22 @@ def do_clustering(pi, n_clusters):
     return bests, np.mean(np.array(dists)), bins, kmeans
 
 
-def main():
+def main(args):
     """try:
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.benchmark_limit = 0
     except Exception as e:
         print(e)"""
-    n_clusters = 10
-    in_model = os.path.join(MINERL_DATA_ROOT, "VPT-models/foundation-model-1x.model")
-    in_weights = os.path.join(MINERL_DATA_ROOT, "VPT-models/foundation-model-1x.weights")
+    #n_clusters = 10
 
-    data_dir = os.path.join(MINERL_DATA_ROOT, "MineRLBasaltFindCave-v0")
-    encode(data_dir, in_model, in_weights)
+    in_model = os.path.join(MINERL_DATA_ROOT, args.model)
+    in_weights = os.path.join(MINERL_DATA_ROOT, args.weights)
 
-    data_dir = os.path.join(MINERL_DATA_ROOT, "MineRLBasaltMakeWaterfall-v0")
+    """data_dir = os.path.join(MINERL_DATA_ROOT, "MineRLBasaltFindCave-v0")
+    #data_dir = '/home/federima/basalt-2022-behavioural-cloning-baseline/data/'
+    encode(data_dir, in_model, in_weights)"""
+
+    """data_dir = os.path.join(MINERL_DATA_ROOT, "MineRLBasaltMakeWaterfall-v0")
     encode(data_dir, in_model, in_weights)
 
     data_dir = os.path.join(MINERL_DATA_ROOT, "MineRLBasaltBuildVillageHouse-v0")
@@ -152,3 +162,16 @@ def main():
 
     data_dir = os.path.join(MINERL_DATA_ROOT, "MineRLBasaltCreateVillageAnimalPen-v0")
     encode(data_dir, in_model, in_weights)
+    """
+    root_train_dir = '/home/federima/basalt_2022_submission/train/'
+    base_path = '/home/federima/basalt_2022_submission/minedojo_data'
+    os.makedirs(os.path.join(root_train_dir, f'{args.num_traj}'), exist_ok=True)
+    tasks = os.listdir(base_path)
+    #existing_tasks = [x.split(sep=".")[0] for x in os.listdir(root_train_dir)]
+    res_dir = os.path.join(root_train_dir, f'{args.num_traj}')
+    for t in tasks:
+        # TODO: check existing tasks name wrt VPT file naming
+        print(f'Encoding {t}')
+        data_dir = os.path.join(base_path, t)
+        #os.makedirs(os.path.join(root_train_dir, t), exist_ok=True)
+        encode(data_dir, in_model, in_weights, args.num_traj, res_dir)

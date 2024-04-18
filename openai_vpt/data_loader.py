@@ -76,7 +76,12 @@ def data_loader_worker(tasks_queue, output_queue, quit_workers_event):
         with open(json_path) as json_file:
             json_lines = json_file.readlines()
             json_data = "[" + ",".join(json_lines) + "]"
-            json_data = json.loads(json_data)
+            try:
+                json_data = json.loads(json_data)
+            except json.decoder.JSONDecodeError:
+                # If this pops up, there's something wrong with the formatting of that .jsonl file
+                print(json_path)
+                break
         for i in range(len(json_data)):
             if quit_workers_event.is_set():
                 break
@@ -142,7 +147,7 @@ class DataLoader:
     - Loads up individual files as trajectory files (i.e. if a trajectory is split into multiple files,
       this code will load it up as a separate item).
     """
-    def __init__(self, dataset_dir, n_workers=8, batch_size=8, n_epochs=1, max_queue_size=16):
+    def __init__(self, dataset_dir, n_workers=8, batch_size=8, n_epochs=1, max_queue_size=16, num_traj=100):
         assert n_workers >= batch_size, "Number of workers must be equal or greater than batch size"
         self.dataset_dir = dataset_dir
         self.n_workers = n_workers
@@ -150,7 +155,8 @@ class DataLoader:
         self.batch_size = batch_size
         self.max_queue_size = max_queue_size
         unique_ids = glob.glob(os.path.join(dataset_dir, "*.mp4"))
-        unique_ids = list(set([os.path.basename(x).split(".")[0] for x in unique_ids]))
+        # TODO: removing sorted shuffles trajectories
+        unique_ids = sorted(list(set([os.path.basename(x).split(".")[0] for x in unique_ids])))[:num_traj]
         self.unique_ids = unique_ids
         # Create tuples of (video_path, json_path) for each unique_id
         demonstration_tuples = []
@@ -236,7 +242,7 @@ class DataLoader:
             batch_actions.append(action)
             batch_episode_id.append(trajectory_id)
             self.n_steps_processed += 1
-        return batch_frames, batch_actions, batch_episode_id
+        return batch_frames, batch_actions, batch_episode_id, self.demonstration_tuples[trajectory_id]
 
     def __del__(self):
         for process in self.processes:
